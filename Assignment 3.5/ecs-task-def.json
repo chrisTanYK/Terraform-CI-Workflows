@@ -1,47 +1,24 @@
 {
-  "family": "flask-xray-taskdef",
+  "family": "christanyk-flask-task",
   "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "256",
-  "memory": "512",
-  "executionRoleArn": "",
-  "taskRoleArn": "",
   "containerDefinitions": [
     {
-      "name": "flask-app",
-      "image": "",
+      "name": "flask-xray-app",
+      "image": "255945442255.dkr.ecr.us-east-1.amazonaws.com/christanyk-ecr-private-repository:latest",
       "portMappings": [
         {
-          "containerPort": 8080,
-          "protocol": "tcp"
-        }
-      ],
-      "environment": [
-        {
-          "name": "MY_APP_CONFIG",
-          "valueFrom": ""
-        },
-        {
-          "name": "MY_DB_PASSWORD",
-          "valueFrom": ""
-        },
-        {
-          "name": "SERVICE_NAME",
-          "value": "flask-xray-service"
+          "containerPort": 5000,
+          "hostPort": 5000
         }
       ],
       "essential": true
-    },
-    {
-      "name": "xray-sidecar",
-      "image": "amazon/aws-xray-daemon",
-      "portMappings": [
-        {
-          "containerPort": 2000,
-          "protocol": "udp"
-        }
-      ],
-      "essential": false
     }
-  ]
+  ],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::255945442255:role/christanyk-ecs-xray-taskexecutionrole",
+  "taskRoleArn": "arn:aws:iam::255945442255:role/christanyk-ecs-xray-taskrole"
 }
