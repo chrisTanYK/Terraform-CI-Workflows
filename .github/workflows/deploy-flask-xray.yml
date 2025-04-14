@@ -80,7 +80,7 @@ jobs:
         aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/SecretsManagerReadWrite
         aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
-    - name: Create Networking: VPC, Subnets, and Security Group
+        - name: Create Networking: VPC, Subnets, and Security Group
       run: |
         vpc_id=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
         aws ec2 create-tags --resources $vpc_id --tags Key=Name,Value=$VPC_NAME
@@ -96,6 +96,7 @@ jobs:
         echo "VPC ID: $vpc_id"
         echo "Subnet ID: $subnet_id"
         echo "Security Group ID: $sg_id"
+
 
     - name: Login to Amazon ECR
       run: |
