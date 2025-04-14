@@ -1,4 +1,4 @@
-name: Deploy Flask ECS App with X-Ray and Networking
+name: Deploy Flask ECS App with X-Ray
 
 on:
   push:
@@ -14,15 +14,20 @@ env:
   TASK_ROLE: christanyk-ecs-xray-taskrole
   TASK_EXEC_ROLE: christanyk-ecs-xray-taskexecutionrole
   IMAGE_TAG: latest
+  VPC_NAME: christanyk-xray-vpc
+  SECURITY_GROUP: christanyk-xray-sg
+  TASK_DEF_FAMILY: flask-xray-task-def
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+    # Step 1: Checkout Source Code
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # Step 2: Configure AWS Credentials
     - name: Configure AWS Credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -30,93 +35,17 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
 
-    - name: Create ECR Repository if not exists
+    # Step 3: Create ECR Repository
+    - name: Create ECR Repository
       run: |
-        aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" \
-        || aws ecr create-repository --repository-name "$ECR_REPOSITORY"
+        aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" || \
+        aws ecr create-repository --repository-name "$ECR_REPOSITORY"
 
-    - name: Create ECS Cluster if not exists
-      run: |
-        aws ecs describe-clusters --clusters "$ECS_CLUSTER" --query "clusters[0].status" --output text \
-        || aws ecs create-cluster --cluster-name "$ECS_CLUSTER"
-
-    - name: Create Networking - VPC, Subnets, Security Group
-      run: |
-        # Create VPC if not exists
-        VPC_ID=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=christanyk-xray-vpc --query 'Vpcs[0].VpcId' --output text)
-        if [ "$VPC_ID" = "None" ]; then
-          VPC_ID=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
-          aws ec2 create-tags --resources $VPC_ID --tags Key=Name,Value=christanyk-xray-vpc
-        fi
-
-        # Create Public Subnet if not exists
-        SUBNET_ID=$(aws ec2 describe-subnets --filters Name=tag:Name,Values=christanyk-xray-public-subnet --query 'Subnets[0].SubnetId' --output text)
-        if [ "$SUBNET_ID" = "None" ]; then
-          SUBNET_ID=$(aws ec2 create-subnet --vpc-id $VPC_ID --cidr-block 10.0.1.0/24 --query 'Subnet.SubnetId' --output text)
-          aws ec2 create-tags --resources $SUBNET_ID --tags Key=Name,Value=christanyk-xray-public-subnet
-          aws ec2 modify-subnet-attribute --subnet-id $SUBNET_ID --map-public-ip-on-launch
-        fi
-
-        # Create Security Group if not exists
-        SG_ID=$(aws ec2 describe-security-groups --filters Name=group-name,Values=christanyk-xray --query 'SecurityGroups[0].GroupId' --output text)
-        if [ "$SG_ID" = "None" ]; then
-          SG_ID=$(aws ec2 create-security-group --group-name christanyk-xray --description "Allow TCP 8080" --vpc-id $VPC_ID --query 'GroupId' --output text)
-          aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 8080 --cidr 0.0.0.0/0
-        fi
-
-    - name: Create christanyk-ecs-xray-taskrole if not exists
-      run: |
-        aws iam get-role --role-name "$TASK_ROLE" --query 'Role.Arn' --output text \
-        || aws iam create-role --role-name "$TASK_ROLE" --assume-role-policy-document '{
-          "Version": "2012-10-17",
-          "Statement": [
-            {
-              "Effect": "Allow",
-              "Principal": {
-                "Service": "ecs-tasks.amazonaws.com"
-              },
-              "Action": "sts:AssumeRole"
-            }
-          ]
-        }'
-        aws iam attach-role-policy --role-name "$TASK_ROLE" --policy-arn arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
-
-    - name: Create christanyk-ecs-xray-taskexecutionrole if not exists
-      run: |
-        aws iam get-role --role-name "$TASK_EXEC_ROLE" --query 'Role.Arn' --output text \
-        || aws iam create-role --role-name "$TASK_EXEC_ROLE" --assume-role-policy-document '{
-          "Version": "2012-10-17",
-          "Statement": [
-            {
-              "Effect": "Allow",
-              "Principal": {
-                "Service": "ecs-tasks.amazonaws.com"
-              },
-              "Action": "sts:AssumeRole"
-            }
-          ]
-        }'
-        aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
-        aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/SecretsManagerReadWrite
-        aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-
-    - name: Create SSM Parameter
-      run: |
-        aws ssm put-parameter \
-          --name "/${{ github.actor }}app/config" \
-          --type "String" \
-          --value "MySSMConfig" \
-          --overwrite
-
-    - name: Create Secrets Manager Secret
-      run: |
-        aws secretsmanager create-secret \
-          --name "${{ github.actor }}app/db_password" \
-          --secret-string "MySecretPassword123!" || echo "Secret already exists."
-
+    # Step 4: Build and Push Docker Image
     - name: Login to Amazon ECR
       run: |
-        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+        aws ecr get-login-password --region $AWS_REGION | \
+        docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
     - name: Build Docker Image
       working-directory: Assignment 3.5
@@ -128,6 +57,106 @@ jobs:
       run: |
         docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
 
-    - name: Update ECS Service (force new deployment)
+    # Step 5: Set up SSM Parameter
+    - name: Create SSM Parameter
       run: |
-        aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --force-new-deployment
+        aws ssm put-parameter --name "/${{ github.actor }}app/config" --type "String" --value "MySSMConfig" --overwrite
+
+    # Step 6: Set up Secrets Manager Secret
+    - name: Create Secrets Manager Secret
+      run: |
+        aws secretsmanager create-secret --name "${{ github.actor }}app/db_password" --secret-string "MySecretPassword123!" || echo "Secret already exists."
+
+    # Step 7: Create ECS Task Role
+    - name: Create ECS Task Role
+      run: |
+        aws iam get-role --role-name "$TASK_ROLE" --query 'Role.Arn' --output text || \
+        aws iam create-role --role-name "$TASK_ROLE" --assume-role-policy-document '{
+          "Version": "2012-10-17",
+          "Statement": [{ "Effect": "Allow", "Principal": { "Service": "ecs-tasks.amazonaws.com" }, "Action": "sts:AssumeRole" }]
+        }'
+        aws iam attach-role-policy --role-name "$TASK_ROLE" --policy-arn arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+
+    # Step 8: Create ECS Task Execution Role
+    - name: Create ECS Task Execution Role
+      run: |
+        aws iam get-role --role-name "$TASK_EXEC_ROLE" --query 'Role.Arn' --output text || \
+        aws iam create-role --role-name "$TASK_EXEC_ROLE" --assume-role-policy-document '{
+          "Version": "2012-10-17",
+          "Statement": [{ "Effect": "Allow", "Principal": { "Service": "ecs-tasks.amazonaws.com" }, "Action": "sts:AssumeRole" }]
+        }'
+        aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+        aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/SecretsManagerReadWrite
+        aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+    # Step 9: Create VPC, Subnet, and Security Group
+    - name: Create VPC and Networking
+      run: |
+        vpc_id=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --tag-specifications "ResourceType=vpc,Tags=[{Key=Name,Value=$VPC_NAME}]" --query 'Vpc.VpcId' --output text)
+        aws ec2 modify-vpc-attribute --vpc-id $vpc_id --enable-dns-support "{\"Value\":true}"
+        aws ec2 modify-vpc-attribute --vpc-id $vpc_id --enable-dns-hostnames "{\"Value\":true}"
+
+        subnet_id=$(aws ec2 create-subnet --vpc-id $vpc_id --cidr-block 10.0.1.0/24 --query 'Subnet.SubnetId' --output text)
+        aws ec2 modify-subnet-attribute --subnet-id $subnet_id --map-public-ip-on-launch
+
+        sg_id=$(aws ec2 create-security-group --group-name $SECURITY_GROUP --description "Security group for Flask ECS app" --vpc-id $vpc_id --query 'GroupId' --output text)
+        aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 8080 --cidr 0.0.0.0/0
+
+    # Step 10: Create ECS Cluster
+    - name: Create ECS Cluster
+      run: |
+        aws ecs describe-clusters --clusters "$ECS_CLUSTER" --query "clusters[0].status" --output text || \
+        aws ecs create-cluster --cluster-name "$ECS_CLUSTER"
+
+    # Step 11: Register ECS Task Definition
+    - name: Register ECS Task Definition
+      run: |
+        task_role_arn=$(aws iam get-role --role-name "$TASK_ROLE" --query 'Role.Arn' --output text)
+        exec_role_arn=$(aws iam get-role --role-name "$TASK_EXEC_ROLE" --query 'Role.Arn' --output text)
+        image_uri="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG"
+
+        aws ecs register-task-definition \
+          --family "$TASK_DEF_FAMILY" \
+          --requires-compatibilities FARGATE \
+          --cpu "256" \
+          --memory "512" \
+          --network-mode awsvpc \
+          --execution-role-arn "$exec_role_arn" \
+          --task-role-arn "$task_role_arn" \
+          --container-definitions "[
+            {
+              \"name\": \"flask-app\",
+              \"image\": \"$image_uri\",
+              \"portMappings\": [{ \"containerPort\": 8080, \"protocol\": \"tcp\" }],
+              \"environment\": [],
+              \"logConfiguration\": {
+                \"logDriver\": \"awslogs\",
+                \"options\": {
+                  \"awslogs-group\": \"/ecs/flask-app\",
+                  \"awslogs-region\": \"$AWS_REGION\",
+                  \"awslogs-stream-prefix\": \"ecs\"
+                }
+              }
+            },
+            {
+              \"name\": \"xray-daemon\",
+              \"image\": \"amazon/aws-xray-daemon\",
+              \"essential\": false,
+              \"portMappings\": [{ \"containerPort\": 2000, \"protocol\": \"udp\" }]
+            }
+          ]"
+
+    # Step 12: Create ECS Service
+    - name: Create ECS Service
+      run: |
+        task_def_arn=$(aws ecs list-task-definitions --family-prefix "$TASK_DEF_FAMILY" --sort DESC --max-items 1 --query 'taskDefinitionArns[0]' --output text)
+        vpc_id=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=$VPC_NAME" --query 'Vpcs[0].VpcId' --output text)
+        subnet_id=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[0].SubnetId' --output text)
+        sg_id=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$SECURITY_GROUP" --query 'SecurityGroups[0].GroupId' --output text)
+
+        aws ecs create-service --cluster "$ECS_CLUSTER" \
+          --service-name "$ECS_SERVICE" \
+          --task-definition "$task_def_arn" \
+          --desired-count 1 \
+          --launch-type FARGATE \
+          --network-configuration "awsvpcConfiguration={subnets=[$subnet_id],securityGroups=[$sg_id],assignPublicIp=ENABLED}"
