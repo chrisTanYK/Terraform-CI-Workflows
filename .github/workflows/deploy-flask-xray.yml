@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: ap-southeast-1
+  AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: 255945442255
   ECR_REPOSITORY: christanyk-ecr-private-repository
   ECS_CLUSTER: christanyk-flask-xray-cluster
@@ -98,7 +98,7 @@ jobs:
 
     - name: Build Docker Image
       run: |
-        docker build -t $ECR_REPOSITORY:$IMAGE_TAG
+        docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
         docker tag $ECR_REPOSITORY:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
 
     - name: Push Docker Image to ECR
