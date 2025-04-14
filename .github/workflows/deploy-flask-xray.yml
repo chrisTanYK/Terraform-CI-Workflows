@@ -123,28 +123,26 @@ jobs:
           --network-mode awsvpc \
           --execution-role-arn "$exec_role_arn" \
           --task-role-arn "$task_role_arn" \
-          --container-definitions "[
-            {
-              \"name\": \"flask-app\",
-              \"image\": \"$image_uri\",
-              \"portMappings\": [{ \"containerPort\": 8080, \"protocol\": \"tcp\" }],
-              \"environment\": [],
-              \"logConfiguration\": {
-                \"logDriver\": \"awslogs\",
-                \"options\": {
-                  \"awslogs-group\": \"/ecs/flask-app\",
-                  \"awslogs-region\": \"$AWS_REGION\",
-                  \"awslogs-stream-prefix\": \"ecs\"
-                }
+          --container-definitions "[{
+            \"name\": \"flask-app\",
+            \"image\": \"$image_uri\",
+            \"portMappings\": [{ \"containerPort\": 8080, \"protocol\": \"tcp\" }],
+            \"environment\": [],
+            \"logConfiguration\": {
+              \"logDriver\": \"awslogs\",
+              \"options\": {
+                \"awslogs-group\": \"/ecs/flask-app\",
+                \"awslogs-region\": \"$AWS_REGION\",
+                \"awslogs-stream-prefix\": \"ecs\"
               }
-            },
-            {
-              \"name\": \"xray-daemon\",
-              \"image\": \"amazon/aws-xray-daemon\",
-              \"essential\": false,
-              \"portMappings\": [{ \"containerPort\": 2000, \"protocol\": \"udp\" }]
             }
-          ]"
+          },
+          {
+            \"name\": \"xray-daemon\",
+            \"image\": \"amazon/aws-xray-daemon\",
+            \"essential\": false,
+            \"portMappings\": [{ \"containerPort\": 2000, \"protocol\": \"udp\" }]
+          }]"
 
     # Step 12: Create ECS Service
     - name: Create ECS Service
