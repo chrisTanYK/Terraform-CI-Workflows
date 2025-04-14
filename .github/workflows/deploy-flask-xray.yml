@@ -127,7 +127,7 @@ jobs:
 
     - name: Register New ECS Task Definition
       run: |
-        aws ecs register-task-definition --cli-input-json file://ecs-task-def-updated.json
+        aws ecs register-task-definition --cli-input-json file://ecs-task-def.json
 
     - name: Update ECS Service
       run: |
