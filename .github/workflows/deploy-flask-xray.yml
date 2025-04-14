@@ -80,7 +80,7 @@ jobs:
         aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/SecretsManagerReadWrite
         aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
-        - name: Create Networking: VPC, Subnets, and Security Group
+    - name: Create Networking: VPC, Subnets, and Security Group
       run: |
         vpc_id=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
         aws ec2 create-tags --resources $vpc_id --tags Key=Name,Value=$VPC_NAME
@@ -101,12 +101,14 @@ jobs:
       run: |
         aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-    - name: Build Docker Image
+    - name: Build and Tag Docker Image
       working-directory: Assignment 3.5
       run: |
-        docker build -t $ECR_REPOSITORY:$IMAGE_TAG /
+        docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
         docker tag $ECR_REPOSITORY:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+        docker tag $ECR_REPOSITORY:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$GITHUB_SHA
 
     - name: Push Docker Image to ECR
       run: |
         docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$GITHUB_SHA
