@@ -1,0 +1,133 @@
+name: Deploy Flask ECS App with X-Ray
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-southeast-1
+  AWS_ACCOUNT_ID: 255945442255
+  ECR_REPOSITORY: christanyk-ecr-private-repository
+  ECS_CLUSTER: christanyk-flask-xray-cluster
+  ECS_SERVICE: christanyk-flask-service
+  TASK_ROLE: christanyk-ecs-xray-taskrole
+  TASK_EXEC_ROLE: christanyk-ecs-xray-taskexecutionrole
+  IMAGE_TAG: latest
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Create ECR Repository if not exists
+      run: |
+        aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" \
+        || aws ecr create-repository --repository-name "$ECR_REPOSITORY"
+
+    - name: Create ECS Cluster if not exists
+      run: |
+        aws ecs describe-clusters --clusters "$ECS_CLUSTER" --query "clusters[0].status" --output text \
+        || aws ecs create-cluster --cluster-name "$ECS_CLUSTER"
+
+    - name: Create christanyk-ecs-xray-taskrole if not exists
+      run: |
+        aws iam get-role --role-name "$TASK_ROLE" --query 'Role.Arn' --output text \
+        || aws iam create-role --role-name "$TASK_ROLE" --assume-role-policy-document '{
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ecs-tasks.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        }'
+
+        aws iam attach-role-policy --role-name "$TASK_ROLE" --policy-arn arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+
+    - name: Create christanyk-ecs-xray-taskexecutionrole if not exists
+      run: |
+        aws iam get-role --role-name "$TASK_EXEC_ROLE" --query 'Role.Arn' --output text \
+        || aws iam create-role --role-name "$TASK_EXEC_ROLE" --assume-role-policy-document '{
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ecs-tasks.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        }'
+
+        aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+        aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/SecretsManagerReadWrite
+        aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+    - name: Create SSM Parameter
+      run: |
+        aws ssm put-parameter \
+          --name "/${{ github.actor }}app/config" \
+          --type "String" \
+          --value "MySSMConfig" \
+          --overwrite
+
+    - name: Create Secrets Manager Secret
+      run: |
+        aws secretsmanager create-secret \
+          --name "${{ github.actor }}app/db_password" \
+          --secret-string "MySecretPassword123!" || echo "Secret already exists."
+
+    - name: Login to Amazon ECR
+      run: |
+        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+    - name: Build Docker Image
+      run: |
+        docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+        docker tag $ECR_REPOSITORY:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+
+    - name: Push Docker Image to ECR
+      run: |
+        docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+
+    - name: Update ECS Task Definition JSON
+      run: |
+        ssm_arn=$(aws ssm get-parameter --name "/${{ github.actor }}app/config" --query 'Parameter.ARN' --output text)
+        secret_arn=$(aws secretsmanager describe-secret --secret-id "${{ github.actor }}app/db_password" --query 'ARN' --output text)
+        task_role_arn=$(aws iam get-role --role-name "$TASK_ROLE" --query 'Role.Arn' --output text)
+        exec_role_arn=$(aws iam get-role --role-name "$TASK_EXEC_ROLE" --query 'Role.Arn' --output text)
+        image_uri="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG"
+
+        jq --arg ssm_arn "$ssm_arn" \
+           --arg secret_arn "$secret_arn" \
+           --arg task_role "$task_role_arn" \
+           --arg exec_role "$exec_role_arn" \
+           --arg image_uri "$image_uri" \
+           '.executionRoleArn=$exec_role |
+            .taskRoleArn=$task_role |
+            .containerDefinitions[0].image=$image_uri |
+            .containerDefinitions[0].environment[0].valueFrom=$ssm_arn |
+            .containerDefinitions[0].environment[1].valueFrom=$secret_arn' ecs-task-def.json > ecs-task-def-updated.json
+
+    - name: Register New ECS Task Definition
+      run: |
+        aws ecs register-task-definition --cli-input-json file://ecs-task-def-updated.json
+
+    - name: Update ECS Service
+      run: |
+        aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --force-new-deployment
