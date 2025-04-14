@@ -1,4 +1,4 @@
-name: Deploy Flask ECS App with X-Ray and VPC Networking
+name: Deploy Flask ECS App with X-Ray and Networking
 
 on:
   push:
@@ -14,8 +14,6 @@ env:
   TASK_ROLE: christanyk-ecs-xray-taskrole
   TASK_EXEC_ROLE: christanyk-ecs-xray-taskexecutionrole
   IMAGE_TAG: latest
-  VPC_NAME: christanyk-xray-vpc
-  SECURITY_GROUP: christanyk-xray
 
 jobs:
   deploy:
@@ -42,6 +40,30 @@ jobs:
         aws ecs describe-clusters --clusters "$ECS_CLUSTER" --query "clusters[0].status" --output text \
         || aws ecs create-cluster --cluster-name "$ECS_CLUSTER"
 
+    - name: Create Networking - VPC, Subnets, Security Group
+      run: |
+        # Create VPC if not exists
+        VPC_ID=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=christanyk-xray-vpc --query 'Vpcs[0].VpcId' --output text)
+        if [ "$VPC_ID" = "None" ]; then
+          VPC_ID=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
+          aws ec2 create-tags --resources $VPC_ID --tags Key=Name,Value=christanyk-xray-vpc
+        fi
+
+        # Create Public Subnet if not exists
+        SUBNET_ID=$(aws ec2 describe-subnets --filters Name=tag:Name,Values=christanyk-xray-public-subnet --query 'Subnets[0].SubnetId' --output text)
+        if [ "$SUBNET_ID" = "None" ]; then
+          SUBNET_ID=$(aws ec2 create-subnet --vpc-id $VPC_ID --cidr-block 10.0.1.0/24 --query 'Subnet.SubnetId' --output text)
+          aws ec2 create-tags --resources $SUBNET_ID --tags Key=Name,Value=christanyk-xray-public-subnet
+          aws ec2 modify-subnet-attribute --subnet-id $SUBNET_ID --map-public-ip-on-launch
+        fi
+
+        # Create Security Group if not exists
+        SG_ID=$(aws ec2 describe-security-groups --filters Name=group-name,Values=christanyk-xray --query 'SecurityGroups[0].GroupId' --output text)
+        if [ "$SG_ID" = "None" ]; then
+          SG_ID=$(aws ec2 create-security-group --group-name christanyk-xray --description "Allow TCP 8080" --vpc-id $VPC_ID --query 'GroupId' --output text)
+          aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 8080 --cidr 0.0.0.0/0
+        fi
+
     - name: Create christanyk-ecs-xray-taskrole if not exists
       run: |
         aws iam get-role --role-name "$TASK_ROLE" --query 'Role.Arn' --output text \
@@ -57,7 +79,6 @@ jobs:
             }
           ]
         }'
-
         aws iam attach-role-policy --role-name "$TASK_ROLE" --policy-arn arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
 
     - name: Create christanyk-ecs-xray-taskexecutionrole if not exists
@@ -75,40 +96,38 @@ jobs:
             }
           ]
         }'
-
         aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
         aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/SecretsManagerReadWrite
         aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
-    - name: Create Networking: VPC, Subnets, and Security Group
+    - name: Create SSM Parameter
       run: |
-        vpc_id=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
-        aws ec2 create-tags --resources $vpc_id --tags Key=Name,Value=$VPC_NAME
-        aws ec2 modify-vpc-attribute --vpc-id $vpc_id --enable-dns-support "{\"Value\":true}"
-        aws ec2 modify-vpc-attribute --vpc-id $vpc_id --enable-dns-hostnames "{\"Value\":true}"
+        aws ssm put-parameter \
+          --name "/${{ github.actor }}app/config" \
+          --type "String" \
+          --value "MySSMConfig" \
+          --overwrite
 
-        subnet_id=$(aws ec2 create-subnet --vpc-id $vpc_id --cidr-block 10.0.1.0/24 --availability-zone us-east-1a --query 'Subnet.SubnetId' --output text)
-        aws ec2 modify-subnet-attribute --subnet-id $subnet_id --map-public-ip-on-launch
-
-        sg_id=$(aws ec2 create-security-group --group-name $SECURITY_GROUP --description "Allow TCP 8080" --vpc-id $vpc_id --query 'GroupId' --output text)
-        aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 8080 --cidr 0.0.0.0/0
-
-        echo "VPC ID: $vpc_id"
-        echo "Subnet ID: $subnet_id"
-        echo "Security Group ID: $sg_id"
+    - name: Create Secrets Manager Secret
+      run: |
+        aws secretsmanager create-secret \
+          --name "${{ github.actor }}app/db_password" \
+          --secret-string "MySecretPassword123!" || echo "Secret already exists."
 
     - name: Login to Amazon ECR
       run: |
         aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-    - name: Build and Tag Docker Image
+    - name: Build Docker Image
       working-directory: Assignment 3.5
       run: |
         docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
         docker tag $ECR_REPOSITORY:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
-        docker tag $ECR_REPOSITORY:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$GITHUB_SHA
 
     - name: Push Docker Image to ECR
       run: |
         docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
-        docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$GITHUB_SHA
+
+    - name: Update ECS Service (force new deployment)
+      run: |
+        aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --force-new-deployment
