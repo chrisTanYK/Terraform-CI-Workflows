@@ -1,4 +1,4 @@
-name: Deploy Flask ECS App with X-Ray
+name: Deploy Flask ECS App with X-Ray and VPC Networking
 
 on:
   push:
@@ -14,6 +14,8 @@ env:
   TASK_ROLE: christanyk-ecs-xray-taskrole
   TASK_EXEC_ROLE: christanyk-ecs-xray-taskexecutionrole
   IMAGE_TAG: latest
+  VPC_NAME: christanyk-xray-vpc
+  SECURITY_GROUP: christanyk-xray
 
 jobs:
   deploy:
@@ -78,19 +80,22 @@ jobs:
         aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/SecretsManagerReadWrite
         aws iam attach-role-policy --role-name "$TASK_EXEC_ROLE" --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
-    - name: Create SSM Parameter
+    - name: Create Networking: VPC, Subnets, and Security Group
       run: |
-        aws ssm put-parameter \
-          --name "/${{ github.actor }}app/config" \
-          --type "String" \
-          --value "MySSMConfig" \
-          --overwrite
+        vpc_id=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
+        aws ec2 create-tags --resources $vpc_id --tags Key=Name,Value=$VPC_NAME
+        aws ec2 modify-vpc-attribute --vpc-id $vpc_id --enable-dns-support "{\"Value\":true}"
+        aws ec2 modify-vpc-attribute --vpc-id $vpc_id --enable-dns-hostnames "{\"Value\":true}"
 
-    - name: Create Secrets Manager Secret
-      run: |
-        aws secretsmanager create-secret \
-          --name "${{ github.actor }}app/db_password" \
-          --secret-string "MySecretPassword123!" || echo "Secret already exists."
+        subnet_id=$(aws ec2 create-subnet --vpc-id $vpc_id --cidr-block 10.0.1.0/24 --availability-zone us-east-1a --query 'Subnet.SubnetId' --output text)
+        aws ec2 modify-subnet-attribute --subnet-id $subnet_id --map-public-ip-on-launch
+
+        sg_id=$(aws ec2 create-security-group --group-name $SECURITY_GROUP --description "Allow TCP 8080" --vpc-id $vpc_id --query 'GroupId' --output text)
+        aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 8080 --cidr 0.0.0.0/0
+
+        echo "VPC ID: $vpc_id"
+        echo "Subnet ID: $subnet_id"
+        echo "Security Group ID: $sg_id"
 
     - name: Login to Amazon ECR
       run: |
@@ -105,30 +110,3 @@ jobs:
     - name: Push Docker Image to ECR
       run: |
         docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
-
-    - name: Update ECS Task Definition JSON
-      run: |
-        ssm_arn=$(aws ssm get-parameter --name "/${{ github.actor }}app/config" --query 'Parameter.ARN' --output text)
-        secret_arn=$(aws secretsmanager describe-secret --secret-id "${{ github.actor }}app/db_password" --query 'ARN' --output text)
-        task_role_arn=$(aws iam get-role --role-name "$TASK_ROLE" --query 'Role.Arn' --output text)
-        exec_role_arn=$(aws iam get-role --role-name "$TASK_EXEC_ROLE" --query 'Role.Arn' --output text)
-        image_uri="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG"
-
-        jq --arg ssm_arn "$ssm_arn" \
-           --arg secret_arn "$secret_arn" \
-           --arg task_role "$task_role_arn" \
-           --arg exec_role "$exec_role_arn" \
-           --arg image_uri "$image_uri" \
-           '.executionRoleArn=$exec_role |
-            .taskRoleArn=$task_role |
-            .containerDefinitions[0].image=$image_uri |
-            .containerDefinitions[0].environment[0].valueFrom=$ssm_arn |
-            .containerDefinitions[0].environment[1].valueFrom=$secret_arn' ecs-task-def.json > ecs-task-def.json
-
-    - name: Register New ECS Task Definition
-      run: |
-        aws ecs register-task-definition --cli-input-json file://ecs-task-def.json
-
-    - name: Update ECS Service
-      run: |
-        aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --force-new-deployment
