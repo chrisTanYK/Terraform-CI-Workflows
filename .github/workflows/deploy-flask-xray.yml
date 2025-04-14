@@ -123,7 +123,7 @@ jobs:
             .taskRoleArn=$task_role |
             .containerDefinitions[0].image=$image_uri |
             .containerDefinitions[0].environment[0].valueFrom=$ssm_arn |
-            .containerDefinitions[0].environment[1].valueFrom=$secret_arn' ecs-task-def.json > ecs-task-def-updated.json
+            .containerDefinitions[0].environment[1].valueFrom=$secret_arn' ecs-task-def.json > ecs-task-def.json
 
     - name: Register New ECS Task Definition
       run: |
