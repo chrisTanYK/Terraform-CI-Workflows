@@ -1,1 +1,4 @@
-flask
+Flask
+boto3
+requests
+
