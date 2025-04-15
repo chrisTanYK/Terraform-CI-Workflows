@@ -33,7 +33,7 @@ jobs:
     - name: Build and tag Docker image from flask-app/Dockerfile
       working-directory: Assignment 3.4
       run: |
-        docker build . -t christanyk-flask-private-repository /
+        docker build . -t christanyk-flask-private-repository
         docker tag christanyk-flask-private-repository:latest 255945442255.dkr.ecr.us-east-1.amazonaws.com/christanyk-flask-private-repository:latest
         docker tag christanyk-flask-private-repository:latest 255945442255.dkr.ecr.us-east-1.amazonaws.com/christanyk-flask-private-repository:${{ github.sha }}
 
@@ -68,4 +68,3 @@ jobs:
     - name: Delete ECR repository
       run: |
         aws ecr delete-repository --repository-name christanyk-flask-private-repository --force
-
