@@ -23,9 +23,9 @@ jobs:
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
     - name: Build and Push Docker image
-      working-directory: Assignment 3.3
       uses: docker/build-push-action@v6
       with:
-        context: .
+        context: ./Assignment 3.3
+        file: ./Assignment 3.3/Dockerfile
         push: true
         tags: ${{ secrets.DOCKERHUB_USERNAME }}/flask-app:latest
