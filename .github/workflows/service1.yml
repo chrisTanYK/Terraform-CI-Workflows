@@ -1,0 +1,22 @@
+name: Build & Push Service1
+
+on:
+  push:
+    paths:
+      - 'Services 1/S3/**'
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Log in to Amazon ECR
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build, Tag, and Push Docker image
+      run: |
+        docker build -t ${{ secrets.ECR_URL }}/s3-service:latest "./Services 1/S3"
+        docker push ${{ secrets.ECR_URL }}/s3-service:latest"
