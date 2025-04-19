@@ -1,0 +1,24 @@
+name: Terraform Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.4.6
+
+    - name: Terraform Init/Plan/Apply
+      working-directory: ./Terraform code
+      run: |
+        terraform init
+        terraform plan
+        terraform apply -auto-approve
