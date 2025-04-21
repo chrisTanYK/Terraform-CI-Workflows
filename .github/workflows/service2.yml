@@ -1,0 +1,22 @@
+name: Build & Push Service 2 - Flask SQS Sender
+
+on:
+  push:
+    paths:
+      - 'service 2 SQS/**'
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Log in to Amazon ECR
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build, Tag, and Push Docker image
+      run: |
+        docker build -t ${{ secrets.ECR_URL }}/flask-sqs-sender:latest "./service 2 SQS"
+        docker push ${{ secrets.ECR_URL }}/flask-sqs-sender:latest"
